@@ -1,6 +1,10 @@
 import requests
+import termtables as tt
+
 from requests.exceptions import JSONDecodeError
 from config.constants import RESOURCE_URL, BOOKING_API_BASE, CHECKOUT_FORM_API, ANNY_BASE_URL, SERVICE_ID
+from re import sub
+from utils.helpers import get_future_datetime, extract_html_value
 
 
 class CheckoutException(Exception):
@@ -21,6 +25,75 @@ class BookingClient:
             'referer': ANNY_BASE_URL + '/',
             'user-agent': 'Mozilla/5.0'
         })
+
+    def get_all_resources(self):
+        response_planner = self.session.get(
+            f"{ANNY_BASE_URL}/en/planner",
+        )
+
+        if not response_planner.ok:
+            print(f"❌ Failed to fetch planner: HTTP {response_planner.status_code}")
+            return None
+
+        customer_account_id = extract_html_value(
+            response_planner.text,
+            r'id="__NUXT_DATA__".*"customer-accounts","([^"]+)"'
+        )
+
+        response_locations = self.session.get(
+            "https://b.anny.eu/api/v1/resources/locations",
+            params = {
+                "filter[include_unavailable]": "1",
+                "filter[customer_account_id]": customer_account_id,
+                "filter[exclude_child_resources]": "0",
+                "filter[use_view_options]": "1",
+                "filter[start_date]": get_future_datetime(0, "00:00:00"),
+                "filter[end_date]": get_future_datetime(0, "23:59:59")
+            }
+        )
+        if not response_locations.ok:
+            print(f"❌ Failed to fetch resources: HTTP {response_locations.status_code}")
+            return None
+
+        try:
+            locations = response_locations.json()
+        except (ValueError, JSONDecodeError):
+            print(f"❌ Invalid JSON response when fetching resources: {response_locations.text[:200]}")
+            return None
+
+        ids = {}
+        for d in locations['resourceLocations']:
+            ids.update({
+                int(d["id"]): {
+                    "name": d["name"],
+                    "service_id": next(iter(d["availabilityResult"]["all_ranges_exact_match"])),
+                    "resource_id": d["id"],
+                    "resource_url_path": f"/resources/{d["parentSlug"]}/children" if d["parentSlug"] else None
+                }
+            })
+
+        # sort after resource_ids
+        ids = {key: value for key, value in sorted(ids.items())}
+
+        # sort after service id
+        ids = {key: value for key, value in
+                       sorted(ids.items(), key=lambda item: int(sub(r"\D", "", item[1]["service_id"]) or 0))}
+
+        return ids
+
+    def print_all_resources(self):
+        ids = self.get_all_resources()
+        ids_tab = [
+            [ids[i]['name'].replace("|", "\\|"), ids[i]['resource_id'], ids[i]['service_id'],
+             ids[i]['resource_url_path']]
+            for i in ids]
+
+        # print available resources
+        tt.print(
+            ids_tab,
+            header=['name', 'resource_id', 'service_id', 'resource_url_path'],
+            style=tt.styles.markdown,
+        )
 
     def find_available_resources(self, start, end):
         response = self.session.get(RESOURCE_URL, params={

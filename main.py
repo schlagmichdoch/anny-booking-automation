@@ -1,3 +1,4 @@
+import argparse
 import datetime
 import time
 
@@ -8,14 +9,14 @@ import pytz
 from config.constants import USERNAME, PASSWORD, RESOURCE_IDS, USE_ANY_RESOURCE_ID, TIMEZONE, SSO_PROVIDER, BOOKING_TIMES
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--list', action='store_true')
+    args = parser.parse_args()
+
     tz = pytz.timezone(TIMEZONE)
 
     if not USERNAME or not PASSWORD:
         print("❌ Missing USERNAME or PASSWORD in .env")
-        return False
-
-    if not BOOKING_TIMES:
-        print("❌ Missing timeslots in BOOKING_TIMES")
         return False
 
     session = AnnySession(USERNAME, PASSWORD, provider_name=SSO_PROVIDER)
@@ -24,7 +25,15 @@ def main():
     if not cookies:
         return False
 
-    booking = BookingClient(cookies)
+    if args.list:
+        print("Printing all resources into a markdown table now:")
+        booking = BookingClient(cookies)
+        booking.print_all_resources()
+        return True
+
+    if not BOOKING_TIMES:
+        print("❌ Missing timeslots in BOOKING_TIMES")
+        return False
 
     # Only wait for midnight if within 10 minutes, otherwise execute immediately
     now = datetime.datetime.now(tz)
